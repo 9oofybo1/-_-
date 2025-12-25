@@ -280,17 +280,19 @@ class MainWindow(QMainWindow):
         self.camera_manager.stop_camera()
         super().closeEvent(event)
 
-
 class RecognitionWindow(QWidget):
     """Адаптированная версия старого окна распознавания как виджет"""
 
-    def __init__(self, camera_manager, user_id):
+    def __init__(self, camera_manager, user_id, face_recognition_module=None):
         super().__init__()
 
         # Сохраняем ссылки
         self.camera_manager = camera_manager
         self.user_id = user_id
         self.timer = None
+
+        # Модуль для распознавания лиц (должен быть передан извне)
+        self.face_recognition = face_recognition_module
 
         self.init_ui()
 
@@ -453,7 +455,7 @@ class RecognitionWindow(QWidget):
             "1. Нажмите кнопку 'Запустить камеру'\n"
             "2. Наведите камеру на лицо\n"
             "3. Система автоматически начнет распознавание\n\n"
-            "Результаты будут отображены здесь."
+            "Результаты будут отображаться здесь."
         )
 
     def start_camera(self):
@@ -512,6 +514,7 @@ class RecognitionWindow(QWidget):
             self.start_camera()
 
     def update_frame(self):
+        """Обновляет кадр с камеры и выполняет распознавание"""
         # Проверяем, доступна ли камера
         if not self.camera_manager.is_camera_available(self.user_id):
             return
@@ -521,26 +524,41 @@ class RecognitionWindow(QWidget):
         if frame is None:
             return
 
-        # Обрабатываем кадр
-        face = extract_face(frame)
+        # Инициализируем переменные для распознавания
         best_score = 0
         best_person_id = None
+        recognized_person = None
 
-        if face is not None:
-            for person_id, blob in get_all_photos():
-                db_img = cv2.imdecode(
-                    np.frombuffer(blob, np.uint8),
-                    cv2.IMREAD_GRAYSCALE
-                )
-                score = compare_faces(face, db_img)
-                if score > best_score:
-                    best_score = score
-                    best_person_id = person_id
+        # Обрабатываем кадр, если доступен модуль распознавания
+        if self.face_recognition:
+            # Извлекаем лицо из кадра
+            face = self.face_recognition.extract_face(frame)
+
+            if face is not None:
+                # Получаем все фото из базы данных
+                all_photos = self.face_recognition.get_all_photos()
+
+                for person_id, blob in all_photos:
+                    # Декодируем изображение из базы данных
+                    db_img = cv2.imdecode(
+                        np.frombuffer(blob, np.uint8),
+                        cv2.IMREAD_GRAYSCALE
+                    )
+
+                    # Сравниваем лица
+                    score = self.face_recognition.compare_faces(face, db_img)
+
+                    if score > best_score:
+                        best_score = score
+                        best_person_id = person_id
+
+                # Получаем информацию о распознанном человеке
+                if best_score >= 50 and best_person_id is not None:
+                    recognized_person = self.face_recognition.get_person_by_id(best_person_id)
 
         # Обновление информации
-        if best_score >= 50 and best_person_id is not None:
-            person = get_person_by_id(best_person_id)
-            self.update_person_info(person, best_score)
+        if recognized_person is not None and best_score >= 50:
+            self.update_person_info(recognized_person, best_score)
         else:
             self.update_person_info(None, best_score)
 
@@ -564,6 +582,7 @@ class RecognitionWindow(QWidget):
         self.video.setAlignment(Qt.AlignCenter)
 
     def update_person_info(self, person, similarity):
+        """Обновляет информацию о распознанном человеке"""
         self.confidence_value.setText(f"{similarity:.1f}%")
 
         # Обновляем цвет уверенности
@@ -610,6 +629,9 @@ class RecognitionWindow(QWidget):
                 f"🔢 ID в системе: {person[0]}"
             )
 
+    def set_face_recognition_module(self, face_recognition_module):
+        """Устанавливает модуль для распознавания лиц"""
+        self.face_recognition = face_recognition_module
 
 class DatabaseWindow(QWidget):
     """Адаптированная версия старого окна базы данных как виджет"""

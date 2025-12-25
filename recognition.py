@@ -1,15 +1,247 @@
+"""
+Модуль для сравнения лиц с использованием LBPH-распознавателя.
+LBPH (Local Binary Patterns Histograms) устойчив к изменениям освещения.
+"""
 import cv2
+import numpy as np
+import pickle
+import os
 
+MODEL_FILE = "face_recognition_model.yml"
+
+
+class FaceRecognizer:
+    """Класс для распознавания лиц с использованием LBPH"""
+
+    def __init__(self):
+        self.recognizer = cv2.face.LBPHFaceRecognizer_create()
+        self.labels = []  # ID людей
+        self.label_names = {}  # Соответствие ID -> имя
+        self.is_trained = False
+
+    def prepare_training_data(self, all_photos, all_persons):
+        """
+        Подготавливает данные для обучения модели
+
+        Args:
+            all_photos: список из БД в формате [(person_id, image_blob), ...]
+            all_persons: список людей из БД в формате [(id, first_name, last_name, group), ...]
+
+        Returns:
+            faces: список изображений лиц
+            labels: список соответствующих ID
+        """
+        faces = []
+        labels = []
+
+        # Создаем mapping ID -> имя для удобства
+        self.label_names = {p[0]: f"{p[1]} {p[2]}" for p in all_persons}
+
+        for person_id, blob in all_photos:
+            try:
+                # Декодируем изображение из blob
+                img = cv2.imdecode(
+                    np.frombuffer(blob, np.uint8),
+                    cv2.IMREAD_GRAYSCALE
+                )
+
+                if img is not None:
+                    # Нормализуем размер для консистентности
+                    img = cv2.resize(img, (200, 200))
+                    faces.append(img)
+                    labels.append(person_id)
+
+            except Exception as e:
+                print(f"Ошибка обработки фото для person_id={person_id}: {e}")
+                continue
+
+        return faces, labels
+
+    def train(self, all_photos, all_persons):
+        """
+        Обучает модель на данных из базы
+
+        Args:
+            all_photos: список фотографий из БД
+            all_persons: список людей из БД
+
+        Returns:
+            bool: True если обучение успешно
+        """
+        if not all_photos:
+            print("Нет данных для обучения")
+            return False
+
+        print(f"Начинаю обучение модели на {len(all_photos)} фото...")
+
+        try:
+            faces, labels = self.prepare_training_data(all_photos, all_persons)
+
+            if not faces:
+                print("Не удалось подготовить лица для обучения")
+                return False
+
+            # Обучаем модель
+            self.recognizer.train(faces, np.array(labels))
+            self.labels = list(set(labels))
+            self.is_trained = True
+
+            print(f"Модель обучена успешно! Уникальных лиц: {len(self.labels)}")
+
+            # Сохраняем модель
+            self.save_model()
+
+            return True
+
+        except Exception as e:
+            print(f"Ошибка обучения модели: {e}")
+            return False
+
+    def predict(self, face_image):
+        """
+        Распознает лицо на изображении
+
+        Args:
+            face_image: изображение лица в оттенках серого
+
+        Returns:
+            tuple: (person_id, confidence, label_name)
+                   где confidence - показатель уверенности (чем МЕНЬШЕ, тем лучше)
+        """
+        if not self.is_trained:
+            return None, 1000, "Модель не обучена"
+
+        try:
+            # Нормализуем размер входного изображения
+            face_resized = cv2.resize(face_image, (200, 200))
+
+            # Предсказываем
+            label, confidence = self.recognizer.predict(face_resized)
+
+            # В LBPH confidence - это расстояние (чем меньше, тем лучше совпадение)
+            # Преобразуем в проценты (0-100, где 100 - лучше)
+            similarity_score = max(0, 100 - confidence)
+
+            # Получаем имя человека
+            person_name = self.label_names.get(label, f"ID {label}")
+
+            return label, similarity_score, person_name
+
+        except Exception as e:
+            print(f"Ошибка предсказания: {e}")
+            return None, 0, "Ошибка распознавания"
+
+    def save_model(self, filename=MODEL_FILE):
+        """Сохраняет модель в файл"""
+        try:
+            self.recognizer.write(filename)
+
+            # Сохраняем дополнительные данные
+            metadata = {
+                'labels': self.labels,
+                'label_names': self.label_names,
+                'is_trained': self.is_trained
+            }
+
+            with open(filename + '.meta', 'wb') as f:
+                pickle.dump(metadata, f)
+
+            print(f"Модель сохранена в {filename}")
+            return True
+
+        except Exception as e:
+            print(f"Ошибка сохранения модели: {e}")
+            return False
+
+    def load_model(self, filename=MODEL_FILE):
+        """Загружает модель из файла"""
+        try:
+            if not os.path.exists(filename):
+                print(f"Файл модели {filename} не найден")
+                return False
+
+            # Загружаем модель
+            self.recognizer.read(filename)
+
+            # Загружаем метаданные
+            meta_file = filename + '.meta'
+            if os.path.exists(meta_file):
+                with open(meta_file, 'rb') as f:
+                    metadata = pickle.load(f)
+                    self.labels = metadata.get('labels', [])
+                    self.label_names = metadata.get('label_names', {})
+                    self.is_trained = metadata.get('is_trained', False)
+
+            print(f"Модель загружена из {filename}. Лиц в базе: {len(self.labels)}")
+            return True
+
+        except Exception as e:
+            print(f"Ошибка загрузки модели: {e}")
+            return False
+
+    def compare_faces(self, face1, face2):
+        """
+        Сравнивает два лица напрямую (для обратной совместимости)
+
+        Args:
+            face1, face2: изображения лиц
+
+        Returns:
+            float: процент сходства (0-100)
+        """
+        if not self.is_trained:
+            return 0
+
+        try:
+            # Создаем временную модель для сравнения двух лиц
+            temp_recognizer = cv2.face.LBPHFaceRecognizer_create()
+
+            # Подготавливаем данные
+            faces = [
+                cv2.resize(face1, (200, 200)),
+                cv2.resize(face2, (200, 200))
+            ]
+            labels = [1, 2]  # Разные метки
+
+            # Обучаем на двух лицах
+            temp_recognizer.train(faces, np.array(labels))
+
+            # Пытаемся распознать первое лицо как второе
+            test_face = cv2.resize(face1, (200, 200))
+            label, confidence = temp_recognizer.predict(test_face)
+
+            # Преобразуем confidence в проценты
+            similarity = max(0, 100 - confidence)
+
+            return similarity
+
+        except Exception as e:
+            print(f"Ошибка сравнения лиц: {e}")
+            return 0
+
+# Создаем глобальный экземпляр для использования в других модулях
+face_recognizer = FaceRecognizer()
 
 def compare_faces(face1, face2):
-    face1 = cv2.resize(face1, (200, 200))
-    face2 = cv2.resize(face2, (200, 200))
+    """
+    Функция для обратной совместимости со старым кодом
+    Использует новую модель LBPH для сравнения
+    """
+    return face_recognizer.compare_faces(face1, face2)
 
-    h1 = cv2.calcHist([face1], [0], None, [256], [0, 256])
-    h2 = cv2.calcHist([face2], [0], None, [256], [0, 256])
+def check_model_status():
+    """
+    Проверяет состояние модели распознавания
+    Возвращает True если модель обучена и готова к работе
+    """
+    return face_recognizer.is_trained and len(face_recognizer.labels) > 0
 
-    cv2.normalize(h1, h1)
-    cv2.normalize(h2, h2)
-
-    score = cv2.compareHist(h1, h2, cv2.HISTCMP_CORREL)
-    return max(score, 0) * 100
+def get_model_info():
+    """
+    Возвращает информацию о состоянии модели
+    """
+    return {
+        'is_trained': face_recognizer.is_trained,
+        'num_faces': len(face_recognizer.labels),
+        'label_names': face_recognizer.label_names
+    }
