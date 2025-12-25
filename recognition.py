@@ -14,59 +14,69 @@ class FaceRecognizer:
     """Класс для распознавания лиц с использованием LBPH"""
 
     def __init__(self):
-        self.recognizer = cv2.face.LBPHFaceRecognizer_create()
-        self.labels = []  # ID людей
-        self.label_names = {}  # Соответствие ID -> имя
+        # ПРОСТЫЕ параметры LBPH (минимум вычислений)
+        self.recognizer = cv2.face.LBPHFaceRecognizer_create(
+            radius=1,  # Меньше вычислений
+            neighbors=8,  # Минимум соседей
+            grid_x=7,  # Упрощенная сетка
+            grid_y=7,
+            threshold=100  # Стандартный порог
+        )
+        self.labels = []
+        self.label_names = {}
         self.is_trained = False
 
     def prepare_training_data(self, all_photos, all_persons):
         """
-        Подготавливает данные для обучения модели
-
-        Args:
-            all_photos: список из БД в формате [(person_id, image_blob), ...]
-            all_persons: список людей из БД в формате [(id, first_name, last_name, group), ...]
-
-        Returns:
-            faces: список изображений лиц
-            labels: список соответствующих ID
+        Подготавливает данные для обучения с контролем памяти
         """
         faces = []
         labels = []
 
-        # Создаем mapping ID -> имя для удобства
         self.label_names = {p[0]: f"{p[1]} {p[2]}" for p in all_persons}
 
-        for person_id, blob in all_photos:
+        total = len(all_photos)
+        print(f"Подготовка {total} фото для обучения...")
+
+        for idx, (person_id, blob) in enumerate(all_photos):
             try:
-                # Декодируем изображение из blob
+                # Показываем прогресс каждые 50 фото
+                if idx % 50 == 0:
+                    print(f"  Обработано {idx}/{total} фото")
+
+                # Декодируем изображение
                 img = cv2.imdecode(
                     np.frombuffer(blob, np.uint8),
                     cv2.IMREAD_GRAYSCALE
                 )
 
                 if img is not None:
-                    # Нормализуем размер для консистентности
+                    # МИНИМАЛЬНАЯ обработка
                     img = cv2.resize(img, (200, 200))
                     faces.append(img)
                     labels.append(person_id)
 
+                # Очищаем память каждые 100 фото
+                if idx % 100 == 0:
+                    import gc
+                    gc.collect()
+
             except Exception as e:
-                print(f"Ошибка обработки фото для person_id={person_id}: {e}")
+                if idx % 20 == 0:  # Не спамить ошибками
+                    print(f"Ошибка фото {idx}: {e}")
                 continue
 
+        print(f"Подготовлено {len(faces)} лиц из {total} фото")
         return faces, labels
 
-    def train(self, all_photos, all_persons):
+    def train(self, all_photos, all_persons, progress_callback=None):
         """
-        Обучает модель на данных из базы
+        Обучает модель на данных из базы с возможностью отслеживания прогресса
 
         Args:
-            all_photos: список фотографий из БД
-            all_persons: список людей из БД
-
-        Returns:
-            bool: True если обучение успешно
+            all_photos: список фотографий
+            all_persons: список людей
+            progress_callback: функция для отслеживания прогресса (опционально)
         """
         if not all_photos:
             print("Нет данных для обучения")
@@ -75,16 +85,54 @@ class FaceRecognizer:
         print(f"Начинаю обучение модели на {len(all_photos)} фото...")
 
         try:
-            faces, labels = self.prepare_training_data(all_photos, all_persons)
+            # Подготавливаем данные с прогрессом
+            total = len(all_photos)
+            faces = []
+            labels = []
+
+            # Создаем mapping ID -> имя для удобства
+            self.label_names = {p[0]: f"{p[1]} {p[2]}" for p in all_persons}
+
+            for i, (person_id, blob) in enumerate(all_photos):
+                try:
+                    # Обновляем прогресс каждые 10 фото
+                    if progress_callback and i % 10 == 0:
+                        progress = int((i / total) * 50)  # 50% на подготовку
+                        progress_callback(progress, f"Обработка фото {i + 1}/{total}")
+
+                    # Декодируем изображение из blob
+                    img = cv2.imdecode(
+                        np.frombuffer(blob, np.uint8),
+                        cv2.IMREAD_GRAYSCALE
+                    )
+
+                    if img is not None:
+                        # Препроцессинг
+                        img = self.preprocess_face(img)
+                        img = cv2.resize(img, (200, 200))
+                        faces.append(img)
+                        labels.append(person_id)
+
+                except Exception as e:
+                    print(f"Ошибка обработки фото {i + 1}: {e}")
+                    continue
+
+            print(f"Подготовлено {len(faces)} лиц для обучения")
 
             if not faces:
                 print("Не удалось подготовить лица для обучения")
                 return False
 
             # Обучаем модель
+            if progress_callback:
+                progress_callback(75, "Обучение модели LBPH...")
+
             self.recognizer.train(faces, np.array(labels))
             self.labels = list(set(labels))
             self.is_trained = True
+
+            if progress_callback:
+                progress_callback(100, "Обучение завершено")
 
             print(f"Модель обучена успешно! Уникальных лиц: {len(self.labels)}")
 
@@ -95,30 +143,28 @@ class FaceRecognizer:
 
         except Exception as e:
             print(f"Ошибка обучения модели: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
     def predict(self, face_image):
         """
         Распознает лицо на изображении
-
-        Args:
-            face_image: изображение лица в оттенках серого
-
-        Returns:
-            tuple: (person_id, confidence, label_name)
-                   где confidence - показатель уверенности (чем МЕНЬШЕ, тем лучше)
         """
         if not self.is_trained:
             return None, 1000, "Модель не обучена"
 
         try:
-            # Нормализуем размер входного изображения
+            # ПРЕПРОЦЕССИНГ перед распознаванием
+            face_image = self.preprocess_face(face_image)
+
+            # Нормализуем размер
             face_resized = cv2.resize(face_image, (200, 200))
 
             # Предсказываем
             label, confidence = self.recognizer.predict(face_resized)
 
-            # В LBPH confidence - это расстояние (чем меньше, тем лучше совпадение)
+            # В LBPH confidence - это расстояние (чем меньше, тем лучше)
             # Преобразуем в проценты (0-100, где 100 - лучше)
             similarity_score = max(0, 100 - confidence)
 
@@ -218,6 +264,28 @@ class FaceRecognizer:
         except Exception as e:
             print(f"Ошибка сравнения лиц: {e}")
             return 0
+
+    def preprocess_face(self, face_image):
+        """
+        Подготавливает лицо для лучшего распознавания
+        """
+        if face_image is None or face_image.size == 0:
+            return face_image
+
+        try:
+            # 1. Нормализация гистограммы (выравнивание освещения)
+            face_image = cv2.equalizeHist(face_image)
+
+            # 2. Гауссово размытие для уменьшения шума
+            face_image = cv2.GaussianBlur(face_image, (3, 3), 0)
+
+            # 3. Увеличение контраста
+            face_image = cv2.convertScaleAbs(face_image, alpha=1.2, beta=10)
+
+            return face_image
+        except Exception as e:
+            print(f"Ошибка препроцессинга: {e}")
+            return face_image
 
 # Создаем глобальный экземпляр для использования в других модулях
 face_recognizer = FaceRecognizer()

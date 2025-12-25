@@ -8,6 +8,7 @@ import os
 # Добавляем текущую директорию в путь для импортов
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+
 from database import init_db, get_all_photos, get_all_persons
 from recognition import face_recognizer
 
