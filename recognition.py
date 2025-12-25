@@ -245,3 +245,23 @@ def get_model_info():
         'num_faces': len(face_recognizer.labels),
         'label_names': face_recognizer.label_names
     }
+
+# Функция для обратной совместимости
+def compare_faces(face1, face2):
+    """
+    Функция для обратной совместимости со старым кодом
+    """
+    return face_recognizer.compare_faces(face1, face2)
+
+# Функция для проверки состояния модели
+def check_model_status():
+    """Проверяет состояние модели распознавания"""
+    return face_recognizer.is_trained and len(face_recognizer.labels) > 0
+
+def get_model_info():
+    """Возвращает информацию о состоянии модели"""
+    return {
+        'is_trained': face_recognizer.is_trained,
+        'num_faces': len(face_recognizer.labels),
+        'label_names': face_recognizer.label_names
+    }

@@ -34,20 +34,12 @@ def train_model():
         print("Добавьте людей через интерфейс сначала.")
         return False
 
-    # Выводим информацию о людях
-    print("\nЛюди в базе:")
-    for person in all_persons:
-        person_id, first_name, last_name, group = person
-        # Считаем фото для этого человека
-        photo_count = sum(1 for pid, _ in all_photos if pid == person_id)
-        print(f"  ID {person_id}: {first_name} {last_name} ({group}) - {photo_count} фото")
-
     # Обучаем модель
     print("\nНачинаю обучение модели LBPH...")
     success = face_recognizer.train(all_photos, all_persons)
 
     if success:
-        print("\n✅ МОДЕЛЬ УСПЕШНО ОБУЧЕНА!")
+        print(f"\n✅ МОДЕЛЬ УСПЕШНО ОБУЧЕНА!")
         print(f"   Обучено на {len(face_recognizer.labels)} уникальных лицах")
 
         # Сохраняем модель
@@ -55,8 +47,27 @@ def train_model():
 
         # Тестируем модель
         print("\nТестирование модели:")
-        print("Статус модели:", "Обучена" if face_recognizer.is_trained else "Не обучена")
-        print("Количество лиц:", len(face_recognizer.labels))
+        print(f"Статус модели: {'Обучена' if face_recognizer.is_trained else 'Не обучена'}")
+        print(f"Количество лиц: {len(face_recognizer.labels)}")
+
+        # Тестируем сравнение лиц
+        if all_photos:
+            try:
+                import cv2
+                import numpy as np
+
+                # Берем первое фото для теста
+                person_id, blob = all_photos[0]
+                test_face = cv2.imdecode(np.frombuffer(blob, np.uint8), cv2.IMREAD_GRAYSCALE)
+
+                # Тестируем предсказание
+                label, confidence, name = face_recognizer.predict(test_face)
+                similarity = max(0, 100 - confidence)
+
+                print(f"\nТестовое предсказание:")
+                print(f"  ID: {label}, Сходство: {similarity:.1f}%, Имя: {name}")
+            except Exception as e:
+                print(f"Ошибка тестирования: {e}")
 
         return True
     else:
@@ -65,7 +76,14 @@ def train_model():
 
 
 if __name__ == "__main__":
-    train_model()
+    success = train_model()
 
-    # Ждем нажатия Enter перед закрытием
+    if success:
+        print("\n" + "=" * 50)
+        print("Модель готова к использованию!")
+        print("Запустите приложение: python main.py")
+    else:
+        print("\n" + "=" * 50)
+        print("Не удалось обучить модель!")
+
     input("\nНажмите Enter для выхода...")

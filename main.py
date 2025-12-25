@@ -1,103 +1,57 @@
 import sys
-import os
-from PyQt5.QtWidgets import QApplication, QMessageBox
+from PyQt5.QtWidgets import QApplication
 from main_window import MainWindow
 from database import init_db
-from recognition import face_recognizer, check_model_status
+from recognition import face_recognizer
+from database import get_all_photos, get_all_persons
 
 
-def initialize_application():
-    """Инициализирует все компоненты приложения"""
-    print("=" * 50)
-    print("ЗАПУСК СИСТЕМЫ РАСПОЗНАВАНИЯ ЛИЦ")
-    print("=" * 50)
+def initialize_face_recognition():
+    """Инициализирует систему распознавания лиц"""
+    print("Инициализация системы распознавания...")
 
-    # 1. Инициализация базы данных
-    print("1. Инициализация базы данных...")
+    # Инициализация базы данных
     init_db()
-    print("   ✓ База данных готова")
 
-    # 2. Проверка и загрузка модели
-    print("2. Проверка модели распознавания...")
+    # Пробуем загрузить модель
+    model_loaded = face_recognizer.load_model()
 
-    # Сначала пробуем загрузить сохраненную модель
-    model_loaded = False
-    if os.path.exists("face_recognition_model.yml"):
-        print("   Найдена сохраненная модель, загружаю...")
-        model_loaded = face_recognizer.load_model()
+    if not model_loaded:
+        print("Модель не найдена, обучаю новую...")
+        # Получаем данные для обучения
+        all_photos = get_all_photos()
+        all_persons = get_all_persons()
 
-    # Если модель не загружена или не обучена, показываем предупреждение
-    if not model_loaded or not check_model_status():
-        print("   ⚠️ Модель не обучена или повреждена")
-        print("   Запустите обучение через меню или train_model.py")
+        if not all_photos:
+            print("В базе нет фотографий для обучения модели")
+            return False
 
-        # Создаем QApplication для показа диалога
-        app_temp = QApplication(sys.argv)
+        # Обучаем модель
+        success = face_recognizer.train(all_photos, all_persons)
 
-        reply = QMessageBox.question(
-            None, 'Модель не обучена',
-            'Модель распознавания лиц не обучена.\n\n'
-            '1. Обучить сейчас (займет 10-30 секунд)\n'
-            '2. Продолжить без распознавания\n\n'
-            'Обучить модель?',
-            QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
-            QMessageBox.Yes
-        )
-
-        if reply == QMessageBox.Yes:
-            # Обучаем модель
-            from database import get_all_photos, get_all_persons
-            all_photos = get_all_photos()
-            all_persons = get_all_persons()
-
-            if all_photos:
-                print("   Обучение модели...")
-                success = face_recognizer.train(all_photos, all_persons)
-                if success:
-                    print("   ✓ Модель успешно обучена")
-                    face_recognizer.save_model()
-                else:
-                    print("   ✗ Ошибка обучения модели")
-            else:
-                QMessageBox.warning(
-                    None, 'Нет данных',
-                    'В базе нет фотографий для обучения!\n\n'
-                    'Добавьте людей через раздел "Добавить человека"'
-                )
-        elif reply == QMessageBox.Cancel:
-            print("   Запуск отменен")
-            sys.exit(0)
+        if success:
+            print(f"Модель обучена успешно! Лиц в базе: {len(face_recognizer.labels)}")
+            face_recognizer.save_model()
+            return True
         else:
-            print("   Продолжаю без обученной модели")
+            print("Ошибка обучения модели")
+            return False
 
-    else:
-        print(f"   ✓ Модель загружена ({len(face_recognizer.labels)} лиц)")
-
-    print("3. Запуск графического интерфейса...")
+    print(f"Модель загружена. Лиц в базе: {len(face_recognizer.labels)}")
     return True
 
 
 def main():
-    # Инициализируем приложение
-    if not initialize_application():
-        print("Не удалось инициализировать приложение")
-        return
+    # Инициализация системы распознавания
+    if not initialize_face_recognition():
+        print("Предупреждение: система распознавания не инициализирована")
 
-    # Создаем основное приложение
+    # Создание приложения
     app = QApplication(sys.argv)
 
     # Создание главного окна
     window = MainWindow()
     window.show()
-
-    # Запускаем статус модели в заголовок окна
-    if check_model_status():
-        window.setWindowTitle(f"Facer - Распознавание лиц ({len(face_recognizer.labels)} лиц в базе)")
-    else:
-        window.setWindowTitle("Facer - Модель не обучена")
-
-    print("\n✅ ПРИЛОЖЕНИЕ ЗАПУЩЕНО")
-    print("=" * 50)
 
     sys.exit(app.exec_())
 

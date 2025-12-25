@@ -291,8 +291,18 @@ class RecognitionWindow(QWidget):
         self.user_id = user_id
         self.timer = None
 
-        # Модуль для распознавания лиц (должен быть передан извне)
-        self.face_recognition = face_recognition_module
+        # Импортируем необходимые модули
+        import cv2
+        import numpy as np
+        from image_utils import extract_face
+        from recognition_service import recognize_face
+        from database import get_person_by_id
+
+        self.cv2 = cv2
+        self.np = np
+        self.extract_face = extract_face
+        self.recognize_face = recognize_face
+        self.get_person_by_id = get_person_by_id
 
         self.init_ui()
 
@@ -524,53 +534,30 @@ class RecognitionWindow(QWidget):
         if frame is None:
             return
 
-        # Инициализируем переменные для распознавания
-        best_score = 0
-        best_person_id = None
-        recognized_person = None
+        # Извлекаем лицо из кадра
+        face = self.extract_face(frame)
 
-        # Обрабатываем кадр, если доступен модуль распознавания
-        if self.face_recognition:
-            # Извлекаем лицо из кадра
-            face = self.face_recognition.extract_face(frame)
+        # Распознаем лицо если найдено
+        if face is not None:
+            # Используем новый сервис распознавания
+            result = self.recognize_face(face)
 
-            if face is not None:
-                # Получаем все фото из базы данных
-                all_photos = self.face_recognition.get_all_photos()
-
-                for person_id, blob in all_photos:
-                    # Декодируем изображение из базы данных
-                    db_img = cv2.imdecode(
-                        np.frombuffer(blob, np.uint8),
-                        cv2.IMREAD_GRAYSCALE
-                    )
-
-                    # Сравниваем лица
-                    score = self.face_recognition.compare_faces(face, db_img)
-
-                    if score > best_score:
-                        best_score = score
-                        best_person_id = person_id
-
-                # Получаем информацию о распознанном человеке
-                if best_score >= 50 and best_person_id is not None:
-                    recognized_person = self.face_recognition.get_person_by_id(best_person_id)
-
-        # Обновление информации
-        if recognized_person is not None and best_score >= 50:
-            self.update_person_info(recognized_person, best_score)
+            # Получаем информацию о распознанном человеке
+            if result['recognized'] and result['person_id'] is not None:
+                recognized_person = self.get_person_by_id(result['person_id'])
+                self.update_person_info(recognized_person, result['similarity'])
+            else:
+                self.update_person_info(None, result['similarity'])
         else:
-            self.update_person_info(None, best_score)
+            self.update_person_info(None, 0)
 
-        # Отображение видео с правильным масштабированием
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        # Отображение видео
+        rgb = self.cv2.cvtColor(frame, self.cv2.COLOR_BGR2RGB)
         h, w, ch = rgb.shape
-
-        # Создаем QImage
         img = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888)
+        pixmap = QPixmap.fromImage(img)
 
         # Масштабируем изображение под размер контейнера
-        pixmap = QPixmap.fromImage(img)
         scaled_pixmap = pixmap.scaled(
             self.video.size(),
             Qt.KeepAspectRatio,
